@@ -663,16 +663,33 @@ def get_chatgpt_action(state):
     action_content = response.choices[0].message.content.strip()
     print('action:', action_content)  # Output: "[(0,0), (1,0)]"
 
-    try:
-        action_list = ast.literal_eval(action_content)
-        print('action list:', action_list)  # Print the resulting list of tuples
-    except SyntaxError as e:
-        print(f"SyntaxError: {e}. Action content was: '{action_content}'")
-        action_list = [(0, 0), (0, 0)]  # Fallback to default action
-    except Exception as e:
-        print(f"Error: {e}. Action content was: '{action_content}'")
-        action_list = [(0, 0), (0, 0)]  # Fallback to default action
-    return action_list
+    return action_content
+
+
+
+def get_parsed_action(state, max_retries=5):
+    def retry_action(state, retries_left):
+        response = get_chatgpt_action(state)
+        try:
+            action_list = ast.literal_eval(response)
+            print('action list:', action_list)  # Print the resulting list of tuples
+            return action_list
+        except SyntaxError as e:
+            print(f"SyntaxError: {e}. Action content was: '{response}'")
+            if retries_left > 1:
+                return retry_action(state, retries_left - 1)
+            else:
+                print("Max retries reached. Falling back to default action.")
+                return [(0, 0), (0, 0)]  # Fallback to default action
+        except Exception as e:
+            print(f"Error: {e}. Action content was: '{response}'")
+            if retries_left > 1:
+                return retry_action(state, retries_left - 1)
+            else:
+                print("Max retries reached. Falling back to default action.")
+                return [(0, 0), (0, 0)]  # Fallback to default action
+
+    return retry_action(state, max_retries)
 
 def evaluate_chatgpt_agent(env, steps_per_episode=100, runs_per_episode=1):
     log_data = []
@@ -696,8 +713,7 @@ def evaluate_chatgpt_agent(env, steps_per_episode=100, runs_per_episode=1):
             #       f"Machine 1 robot status: {state[15]} Machine 2 robot status: {state[16]} Machine 3 robot status: {state[17]} Machine 4 robot "
             #       f"status: {state[18]}")
             print("State provided: ", state)
-            action = get_chatgpt_action(state)
-
+            action = get_parsed_action(state)
             # Take the step in the environment using the action
             next_state, reward, done, info = env.step(action)
             run_reward += reward
