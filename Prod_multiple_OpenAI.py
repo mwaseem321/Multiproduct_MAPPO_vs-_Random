@@ -56,6 +56,7 @@ class Multiproduct:
         self.unload_check= [False, False, False, False]
         # self.agents= ['Robot_1', 'Robot_2']
         self.agents = [0,1]
+        self.ppl_total = 0
 
     def get_alist(self):  # action list
         # self.actionList = []
@@ -324,6 +325,7 @@ class Multiproduct:
         self.n_wait= [1] * self.n
         self.t=0
         self.ms = [1] * self.n
+        self.ppl_total=0
         # self.b= np.array([[0, 1, 1], [1, 0, 1], [1, 1, 1]]).tolist()
         b = np.array([[0, 0, 0], [0, 0, 0], [0, 0, 0]]).tolist()
         return (1, 1, 1, 1,0,0,0,0, 0,0,0,0, 0, 0, 0, 0, 0, 0, 0)
@@ -386,6 +388,11 @@ class Multiproduct:
         # reward = np.sum(self.prod_count[-1]) * 1
         # print("reward: ", reward)
         # waiting_penalty=0
+        ppl= self.n_wait[1] # Machine 1 is the slowest here and it should not wait or be down
+        if self.ms[1]==0:
+            ppl+=1
+        #
+        self.ppl_total+=ppl
         # for machine_id, status in enumerate(self.n_wait):
         #     if status == 0:  # Machine is idle/waiting
         #         waiting_penalty -= 0.1  # Penalize machine for waiting
@@ -396,7 +403,7 @@ class Multiproduct:
 
         # Return the reward for the current step
         reward = step_production * 1  # Modify the scaling factor as needed
-        total_reward= reward #+waiting_penalty
+        total_reward= reward-ppl #+waiting_penalty
         return total_reward
 
     def get_info(self):
@@ -593,9 +600,20 @@ def get_chatgpt_action(state):
     # Define the prompt based on the state #     The goal is to maximize production throughput, specifically focusing on the number of parts processed by the last machine (Machine 4). When selecting
     #     actions, prioritize loading downstream machines (machine 4 first, then machine 3, and so on).
 
-    prompt = f"""You must only provide the actions without any details for example '[(0,2), (0,3)]'.
-    Consider a serial manufacturing system with four machines and three in-between buffers. Each machine has a dedicated processing time, 
-    and the buffers have maximum capacities of 15 parts. There are two robots in the system to handle materials.
+    prompt = f"""You must only provide the actions without any details, e.g., '[(0,2), (0,3)]'.
+
+Consider a serial manufacturing system with four machines (Machines 1-4) and three in-between buffers, each with a maximum capacity of 3 parts. 
+Each machine has a dedicated processing time; Machine 2 is the slowest, meaning it takes longer to process a part than the others. Two robots are in the system to handle materials.
+
+Definitions:
+- "running status" indicates if a machine is up or down: 0 = down, 1 = up.
+- "mp-status" indicates if a machine is loaded with a part: 0 = machine has no part, 1 = machine has a part.
+- "progress" indicates if a machine is processing/processed a part: 0 = either part processing is completed or no part with machine at all, 0<vlaue<1 = part being processed.
+- "robot status" indicates if a robot is assigned to a machine: 0 = not assigned, 1 = assigned.
+
+A machine is in waiting status if it meets either of these conditions:
+1. Running status is 1, mp-status is 0, and robot status is 0.
+2. Running status is 1, mp-status is 1, progress is 0, and robot status is 0.
 
     Given the following states:
 
@@ -628,19 +646,48 @@ def get_chatgpt_action(state):
 
     The feasibility criteria for each action are as follows:
 
-    - Action 1 is feasible only if Buffer 1 < 15, Machine 1 is running, Machine 1 mp-status is free or processing with no progress, and Machine 1 robot status is free.
-    - Action 2 is feasible if Buffer 1 > 0, Buffer 2 < 15, Machine 2 is running, Machine 2 mp-status is free or processing with no progress, and Machine 2 robot status is free.
-    - Action 3 is feasible if Buffer 2 > 0, Buffer 3 < 15, Machine 3 is running, Machine 3 mp-status is free or processing with no progress, and Machine 3 robot status is free.
-    - Action 4 is feasible if Buffer 3 > 0, Machine 4 is running, Machine 4 mp-status is free or processing with no progress, and Machine 4 robot status is free.
+    - **Action 1** is feasible only if:
+      - Buffer 1 < 3,
+      - Machine 1 is running (running status = 1),
+      - Either:
+        - Machine 1 mp-status is 0 (not loaded) or,
+        - Machine 1 mp-status is 1 and progress is 0 (completed processing but still has part),
+      - Machine 1 robot status is 0 (not assigned).
+    
+    - **Action 2** is feasible if:
+      - Buffer 1 > 0 (upstream buffer has a part),
+      - Buffer 2 < 3 (downstream buffer has space),
+      - Machine 2 is running (running status = 1),
+      - Either:
+        - Machine 2 mp-status is 0 (not loaded) or,
+        - Machine 2 mp-status is 1 and progress is 0 (completed processing but still has part),
+      - Machine 2 robot status is 0 (not assigned).
+    
+    - **Action 3** is feasible if:
+      - Buffer 2 > 0 (upstream buffer has a part),
+      - Buffer 3 < 3 (downstream buffer has space),
+      - Machine 3 is running (running status = 1),
+      - Either:
+        - Machine 3 mp-status is 0 (not loaded) or,
+        - Machine 3 mp-status is 1 and progress is 0 (completed processing but still has part),
+      - Machine 3 robot status is 0 (not assigned).
+    
+    - **Action 4** is feasible if:
+      - Buffer 3 > 0 (upstream buffer has a part),
+      - Machine 4 is running (running status = 1),
+      - Either:
+        - Machine 4 mp-status is 0 (not loaded) or,
+        - Machine 4 mp-status is 1 and progress is 0 (completed processing but still has part),
+      - Machine 4 robot status is 0 (not assigned).
 
     If only one action is feasible, it must be accompanied by Action 1. This means if, for example, only Action 3 is feasible, the output should look like this: [(0,2), (0,0)]
 
     If multiple actions are feasible, the actions must be prioritized as follows:
 
     Prioritization of Actions:
-    1. Action 4 (0,3) must be prioritized the most.
-    2. Action 3 (0,2) should be prioritized next.
-    3. Action 2 (0,1) should be prioritized less than Action 3.
+    1. Action 2 (0,1) must be prioritized the most.
+    2. Action 4 (0,3) should be prioritized next.
+    3. Action 3 (0,2) should be prioritized less than Action 4.
     4. Action 1 (0,0) must be prioritized the least.
 
     If no actions are feasible, return '[(0,0), (0,0)]' to indicate both robots are idle.
@@ -663,74 +710,48 @@ def get_chatgpt_action(state):
     action_content = response.choices[0].message.content.strip()
     print('action:', action_content)  # Output: "[(0,0), (1,0)]"
 
-    return action_content
-
-
-
-def get_parsed_action(state, max_retries=5):
-    def retry_action(state, retries_left):
-        response = get_chatgpt_action(state)
-        try:
-            action_list = ast.literal_eval(response)
-            print('action list:', action_list)  # Print the resulting list of tuples
-            return action_list
-        except SyntaxError as e:
-            print(f"SyntaxError: {e}. Action content was: '{response}'")
-            if retries_left > 1:
-                return retry_action(state, retries_left - 1)
-            else:
-                print("Max retries reached. Falling back to default action.")
-                return [(0, 0), (0, 0)]  # Fallback to default action
-        except Exception as e:
-            print(f"Error: {e}. Action content was: '{response}'")
-            if retries_left > 1:
-                return retry_action(state, retries_left - 1)
-            else:
-                print("Max retries reached. Falling back to default action.")
-                return [(0, 0), (0, 0)]  # Fallback to default action
-
-    return retry_action(state, max_retries)
+    try:
+        action_list = ast.literal_eval(action_content)
+        print('action list:', action_list)  # Print the resulting list of tuples
+    except SyntaxError as e:
+        print(f"SyntaxError: {e}. Action content was: '{action_content}'")
+        action_list = [(0, 0), (0, 0)]  # Fallback to default action
+    except Exception as e:
+        print(f"Error: {e}. Action content was: '{action_content}'")
+        action_list = [(0, 0), (0, 0)]  # Fallback to default action
+    return action_list
 
 def evaluate_chatgpt_agent(env, steps_per_episode=100, runs_per_episode=1):
-    log_data = []
     rewards_for_runs = []
+    with open('ppl_test_output.txt', "w") as log_file:
+        for run in range(runs_per_episode):
+            state = env.reset()
+            run_reward = 0
+            for step in range(steps_per_episode):
+                print("Step: ", step)
+                action = get_chatgpt_action(state)
+                next_state, reward, done, info = env.step(action)
+                run_reward += reward
 
-    last_action = None  # Initialize last_action outside the loop to track across steps
+                # Log state, action, and reward to file
+                log_file.write(f"Step {step + 1}:\n")
+                log_file.write(f"State: {state}\n")
+                log_file.write(f"Action: {action}\n")
+                log_file.write(f"Reward: {reward}\n")
+                log_file.write(f"Total_Reward: {run_reward}\n\n")
 
-    # Run the single episode for 3 runs
-    for run in range(runs_per_episode):
-        state = env.reset()
-        # print("state from reset: ", state)
-        run_reward = 0
+                state = next_state
+                print("run reward: ", run_reward)
 
-        for step in range(steps_per_episode):
-            print("Step: ", step)
-            # print("state: ", state)
-            # print(f"Before GPT action: Machine 1 running status: {state[0]},Machine 2 running status: {state[1]}, Machine 3 running status: {state[2]},Machine 4 "
-            #       f"running status: {state[3]} Machine 1 mp-status: {state[4]} Machine 2 mp-status: {state[5]}Machine 3 mp-status: {state[6]}"
-            #       f"Machine 4 mp-status: {state[7]} Buffer 1 level: {state[8]} Buffer 2 level: {state[9]} Buffer 3 level: {state[10]} "
-            #       f"Machine 1 progress:{state[11]} Machine 2 progress:{state[12]} Machine 3 progress:{state[13]} Machine 4 progress: {state[14]}"
-            #       f"Machine 1 robot status: {state[15]} Machine 2 robot status: {state[16]} Machine 3 robot status: {state[17]} Machine 4 robot "
-            #       f"status: {state[18]}")
-            print("State provided: ", state)
-            action = get_parsed_action(state)
-            # Take the step in the environment using the action
-            next_state, reward, done, info = env.step(action)
-            run_reward += reward
-            state = next_state
-            # print("state from step ftn: ", state)
-            # Update last_action with the current action
-            # last_action = action
-            print("run reward: ", run_reward)
-            # Introduce a small delay to avoid hitting API rate limits
-            time.sleep(1)
+                # time.sleep(1)
 
-        rewards_for_runs.append(run_reward)
-        print(f"Run {run + 1}: Total Reward: {run_reward}")
+            rewards_for_runs.append(run_reward)
+            print(f"Run {run + 1}: Total Reward: {run_reward}")
 
     # Calculate mean reward and standard deviation across the runs
     mean_reward = np.mean(rewards_for_runs)
     std_reward = np.std(rewards_for_runs)
+    print("Total PPL: ", env.ppl_total)
 
     return mean_reward, std_reward
 
